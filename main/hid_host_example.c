@@ -64,18 +64,17 @@ typedef struct {
     } hid_host_device;
 } app_event_queue_t;
 
-// NOT NEEDED: this struct is never used anywhere
 typedef struct {
-    char message;
-} scan_buffer_val;
+    char message[10];
+} scan_buffer_received;
 
-// OPTIONAL: only used to print "KEYBOARD"/"MOUSE"/"NONE" in log messages below.
-// Can remove along with the ESP_LOGI calls in hid_host_interface_callback / hid_host_device_event.
-static const char *hid_proto_name_str[] = {
-    "NONE",
-    "KEYBOARD",
-    "MOUSE"
-};
+// // OPTIONAL: only used to print "KEYBOARD"/"MOUSE"/"NONE" in log messages below.
+// // Can remove along with the ESP_LOGI calls in hid_host_interface_callback / hid_host_device_event.
+// static const char *hid_proto_name_str[] = {
+//     "NONE",
+//     "KEYBOARD",
+//     "MOUSE"
+// };
 
 /**
  * @brief Key event
