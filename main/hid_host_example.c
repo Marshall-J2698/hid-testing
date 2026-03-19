@@ -21,19 +21,22 @@
 
 #include "usb/hid_host.h"
 #include "usb/hid_usage_keyboard.h"
-// NOT NEEDED: only required if handling mouse devices
-#include "usb/hid_usage_mouse.h"
+
+#include "admins.h"
 
 /* GPIO Pin number for quit from example logic */
 #define APP_QUIT_PIN                GPIO_NUM_0
 
+#define LED_PIN_NUM                 GPIO_NUM_32
+
+#define ID_LEN                      8     
+
 static const char *TAG = "example";
 
 QueueHandle_t app_event_queue = NULL;
+QueueHandle_t scannedID_queue = NULL;
+QueueHandle_t access_state_queue = NULL;
 StreamBufferHandle_t ascii_stream_buff = NULL;
-
-// NOT NEEDED: leftover from earlier experiment; trigger level is now set to 1 inline in xStreamBufferCreate
-#define sbiSTREAM_BUFFER_TRIGGER_LEVEL_8	( ( BaseType_t ) 8 )
 
 /**
  * @brief APP event group
@@ -48,6 +51,15 @@ typedef enum {
     APP_EVENT = 0,
     APP_EVENT_HID_HOST
 } app_event_group_t;
+
+typedef enum {
+    ACCESS_OFF = 0,
+    ACCESS_ON
+} access_state;
+
+typedef struct { // TODO: see if it's confusing to call this new_state;
+    access_state new_state;
+} access_msg;
 
 /**
  * @brief APP event queue
@@ -65,16 +77,8 @@ typedef struct {
 } app_event_queue_t;
 
 typedef struct {
-    char message[10];
+    char id_message[ID_LEN+1]; //TODO: should I just make ID_LEN include null terminator? i could go either way here
 } scan_buffer_received;
-
-// // OPTIONAL: only used to print "KEYBOARD"/"MOUSE"/"NONE" in log messages below.
-// // Can remove along with the ESP_LOGI calls in hid_host_interface_callback / hid_host_device_event.
-// static const char *hid_proto_name_str[] = {
-//     "NONE",
-//     "KEYBOARD",
-//     "MOUSE"
-// };
 
 /**
  * @brief Key event
@@ -92,8 +96,6 @@ typedef struct {
 #define KEYBOARD_ENTER_MAIN_CHAR    '\r'
 /* When set to 1 pressing ENTER will be extending with LineFeed during serial debug output */
 #define KEYBOARD_ENTER_LF_EXTEND    1
-// NOT NEEDED: ALT+numpad escape sequences (e.g. ALT+065 → 'A'). Card scanners never send these.
-#define KEYBOARD_ENTER_ALT_ESCAPE   1
 
 #if KEYBOARD_ENTER_ALT_ESCAPE
 static bool is_ansi = false;
@@ -171,7 +173,7 @@ const uint8_t keycode2ascii [57][2] = {
 static inline void hid_keyboard_print_char(unsigned int key_char)
 {
     if (!!key_char) {
-        putchar(key_char);
+        // putchar(key_char);
         xStreamBufferSend(ascii_stream_buff, &key_char,1,portMAX_DELAY);
 
 
@@ -184,30 +186,6 @@ static inline void hid_keyboard_print_char(unsigned int key_char)
     }
 }
 
-// NOT NEEDED: empty stub, never called
-static inline void print_received_msg() {
-
-}
-
-// NOT NEEDED: prints a "Keyboard" / "Mouse" / "Generic" header whenever the active device type changes.
-// Pure cosmetic — only useful if you have multiple device types connected simultaneously.
-static void hid_print_new_device_report_header(hid_protocol_t proto)
-{
-    static hid_protocol_t prev_proto_output = -1;
-
-    if (prev_proto_output != proto) {
-        prev_proto_output = proto;
-        printf("\r\n");
-        if (proto == HID_PROTOCOL_MOUSE) {
-            printf("Mouse\r\n");
-        } else if (proto == HID_PROTOCOL_KEYBOARD) {
-            printf("Keyboard\r\n");
-        } else {
-            printf("Generic\r\n");
-        }
-        fflush(stdout);
-    }
-}
 
 /**
  * @brief HID Keyboard modifier verification for capitalization application (right or left shift)
@@ -225,85 +203,6 @@ static inline bool hid_keyboard_is_modifier_shift(uint8_t modifier)
     }
     return false;
 }
-
-// NOT NEEDED: the entire block below (hid_keyboard_is_modifier_alt,
-// hid_keyboard_alt_code_processing, hid_keyboard_alt_code_process_complete) only
-// exists to support ALT+numpad character entry. Card scanners don't use this.
-// You can delete this block and set KEYBOARD_ENTER_ALT_ESCAPE to 0.
-#if KEYBOARD_ENTER_ALT_ESCAPE
-/**
- * @brief HID Keyboard modifier verification for capitalization application (right or left alt)
- *
- * @param[in] modifier
- * @return true  Modifier was pressed (left or right alt)
- * @return false Modifier was not pressed (left or right alt)
- *
- */
-static inline bool hid_keyboard_is_modifier_alt(uint8_t modifier)
-{
-    if (((modifier & HID_LEFT_ALT) == HID_LEFT_ALT) ||
-            ((modifier & HID_RIGHT_ALT) == HID_RIGHT_ALT)) {
-        return true;
-    }
-    return false;
-}
-
-/**
- * @brief HID Keyboard alt code process(Called when ALT is pressed)
- *
- * @param[in] key_code Entered key value
- * @return true  Key values that qualify for ALT escape processing
- * @return false Key values that do not comply with ALT escape processing
- *
- */
-static inline bool hid_keyboard_alt_code_processing(uint8_t key_code)
-{
-    if ((key_code < HID_KEY_KEYPAD_1) || (key_code > HID_KEY_KEYPAD_0)) {
-        return false;
-    }
-    if (key_code == HID_KEY_KEYPAD_0) {
-        if (alt_code == 0) {
-            is_ansi = true;
-            return true;
-        }
-        /* Note: Since the keyboard code 0 of the numeric keypad is not keyboard code 1 minus 1, the
-         * conversion is performed here to facilitate subsequent calculations of the input numbers.
-        */
-        key_code = HID_KEY_KEYPAD_1 - 1;
-    }
-    alt_code = alt_code * 10 + (key_code - (HID_KEY_KEYPAD_1 - 1));
-    return true;
-}
-
-/**
- * @brief HID Keyboard alt code process complete(Called when ALT is not pressed)
- */
-static inline void hid_keyboard_alt_code_process_complete(void)
-{
-    if (alt_code > 0) {
-        alt_code = alt_code & 0xff;
-        if (is_ansi || alt_code == 0) {
-            char utf8_buffer[8] = { 0 };
-            if (alt_code == 0) {
-                alt_code = 0x100;
-            }
-            //ANSI is processed as UTF8
-            if (alt_code <= 0x7F) {
-                utf8_buffer[0] = (char)alt_code;
-            } else {
-                utf8_buffer[0] = 0xC0 | ((alt_code >> 6) & 0x1F);
-                utf8_buffer[1] = 0x80 | (alt_code & 0x3F);
-            }
-            printf("%s", utf8_buffer);
-            fflush(stdout);
-        } else {
-            hid_keyboard_print_char(alt_code);
-        }
-        alt_code = 0;
-    }
-    is_ansi = false;
-}
-#endif
 
 /**
  * @brief HID Keyboard get char symbol from key code
@@ -350,8 +249,6 @@ static inline bool hid_keyboard_get_char(uint8_t modifier,
 static void key_event_callback(key_event_t *key_event)
 {
     unsigned char key_char;
-
-    hid_print_new_device_report_header(HID_PROTOCOL_KEYBOARD);
 
     if (KEY_STATE_PRESSED == key_event->state) {
         if (hid_keyboard_get_char(key_event->modifier,
@@ -429,42 +326,6 @@ static void hid_host_keyboard_report_callback(const uint8_t *const data, const i
     memcpy(prev_keys, &kb_report->key, HID_KEYBOARD_KEY_MAX);
 }
 
-// NOT NEEDED: handles mouse movement/button reports. Remove along with the
-// HID_PROTOCOL_MOUSE branch in hid_host_interface_callback below.
-static void hid_host_mouse_report_callback(const uint8_t *const data, const int length)
-{
-    hid_mouse_input_report_boot_t *mouse_report = (hid_mouse_input_report_boot_t *)data;
-
-    if (length < sizeof(hid_mouse_input_report_boot_t)) {
-        return;
-    }
-
-    static int x_pos = 0;
-    static int y_pos = 0;
-
-    // Calculate absolute position from displacement
-    x_pos += mouse_report->x_displacement;
-    y_pos += mouse_report->y_displacement;
-
-    hid_print_new_device_report_header(HID_PROTOCOL_MOUSE);
-
-    printf("X: %06d\tY: %06d\t|%c|%c|\r",
-           x_pos, y_pos,
-           (mouse_report->buttons.button1 ? 'o' : ' '),
-           (mouse_report->buttons.button2 ? 'o' : ' '));
-    fflush(stdout);
-}
-
-// NOT NEEDED: handles non-boot-protocol HID devices (anything that isn't a keyboard or mouse).
-// A card scanner enumerates as a boot-class keyboard, so it never reaches this path.
-static void hid_host_generic_report_callback(const uint8_t *const data, const int length)
-{
-    hid_print_new_device_report_header(HID_PROTOCOL_NONE);
-    for (int i = 0; i < length; i++) {
-        printf("%02X", data[i]);
-    }
-    putchar('\r');
-}
 
 /**
  * @brief USB HID Host interface callback
@@ -492,28 +353,20 @@ void hid_host_interface_callback(hid_host_device_handle_t hid_device_handle,
         if (HID_SUBCLASS_BOOT_INTERFACE == dev_params.sub_class) {
             if (HID_PROTOCOL_KEYBOARD == dev_params.proto) {
                 hid_host_keyboard_report_callback(data, data_length);
-            } else if (HID_PROTOCOL_MOUSE == dev_params.proto) {
-                // NOT NEEDED: mouse branch — safe to delete
-                hid_host_mouse_report_callback(data, data_length);
-            }
-        } else {
-            // NOT NEEDED: generic (non-boot) HID branch — a card scanner will never land here
-            hid_host_generic_report_callback(data, data_length);
-        }
+            } 
+        } 
 
         break;
     case HID_HOST_INTERFACE_EVENT_DISCONNECTED:
-        ESP_LOGI(TAG, "HID Device, protocol '%s' DISCONNECTED",
-                 hid_proto_name_str[dev_params.proto]);
         ESP_ERROR_CHECK(hid_host_device_close(hid_device_handle));
         break;
     case HID_HOST_INTERFACE_EVENT_TRANSFER_ERROR:
         ESP_LOGI(TAG, "HID Device, protocol '%s' TRANSFER_ERROR",
-                 hid_proto_name_str[dev_params.proto]);
+                 "keyboard");
         break;
     default:
         ESP_LOGE(TAG, "HID Device, protocol '%s' Unhandled event",
-                 hid_proto_name_str[dev_params.proto]);
+                 "keyboard");
         break;
     }
 }
@@ -534,8 +387,6 @@ void hid_host_device_event(hid_host_device_handle_t hid_device_handle,
 
     switch (event) {
     case HID_HOST_DRIVER_EVENT_CONNECTED:
-        ESP_LOGI(TAG, "HID Device, protocol '%s' CONNECTED",
-                 hid_proto_name_str[dev_params.proto]);
 
         const hid_host_device_config_t dev_config = {
             .callback = hid_host_interface_callback,
@@ -556,8 +407,36 @@ void hid_host_device_event(hid_host_device_handle_t hid_device_handle,
     }
 }
 
+
+/**
+ * Testing method; in the future, we should be directly sending to our http task at that point...
+ * 
+ */
+static void receive_ID_task(void *arg) {
+    scan_buffer_received rec_msg;
+    for(;;){
+        xQueueReceive(scannedID_queue,&rec_msg,portMAX_DELAY);
+        printf("from Q: %s\n",rec_msg.id_message);
+    }
+}
+
+static void update_led_task(void *arg) {
+    access_msg state_from_msg;
+    for (;;) {
+        xQueueReceive(access_state_queue,&state_from_msg,portMAX_DELAY);
+        ESP_ERROR_CHECK(gpio_set_level(LED_PIN_NUM,state_from_msg.new_state));
+    }
+}
+
+
+/**
+ * Responsible for reading from the USB inputs from scanner, and assembling them into complete buffer
+ * to be sent to http req task!
+ * 
+ */
 static void scan_reader_task(void *arg)
-{
+{ // TODO: get a better sense of when and when not to use static!
+    static scan_buffer_received cur_msg;
     static char msg_buff[64] = {0};
     size_t pos = 0;
     char ch;
@@ -567,7 +446,16 @@ static void scan_reader_task(void *arg)
             if (ch == '\r' || ch == '\n') {
                 if (pos > 0) {
                     msg_buff[pos] = '\0';
-                    printf("\nBuffer received: %s\n",msg_buff);
+                    memcpy(cur_msg.id_message,msg_buff,ID_LEN+1);
+                    if (is_admin(admin_IDs,2,cur_msg.id_message)){
+                        access_msg command;
+                        command.new_state = ACCESS_ON;
+                        xQueueSend(access_state_queue,&command,portMAX_DELAY);
+                        xQueueSend(scannedID_queue,&cur_msg,portMAX_DELAY);
+                    } else {
+                        xQueueSend(scannedID_queue,&cur_msg,portMAX_DELAY); // TODO: send buffer through msg queue
+                    }
+                    
                     pos = 0;
                 }
             }else if (pos < sizeof(msg_buff) - 1) {
@@ -663,7 +551,12 @@ void app_main(void)
 {
     BaseType_t task_created;
     BaseType_t scan_read_created;
+    BaseType_t scannedID_Queue;
     app_event_queue_t evt_queue;
+
+    access_state_queue = xQueueCreate(10,sizeof(access_msg)); // TODO: figure out size for this queue
+    scannedID_queue = xQueueCreate(1,sizeof(scan_buffer_received)); // size 1, so no new items added while making request
+
     ESP_LOGI(TAG, "HID Host example");
 
     // Init BOOT button: Pressing the button simulates app request to exit
@@ -677,6 +570,16 @@ void app_main(void)
     ESP_ERROR_CHECK(gpio_config(&input_pin));
     ESP_ERROR_CHECK(gpio_install_isr_service(ESP_INTR_FLAG_LEVEL1));
     ESP_ERROR_CHECK(gpio_isr_handler_add(APP_QUIT_PIN, gpio_isr_cb, NULL));
+
+    const gpio_config_t LED_pin = {
+        .pin_bit_mask = BIT64(LED_PIN_NUM),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,    // Enable pull-up
+        .pull_down_en = GPIO_PULLDOWN_ENABLE, // Disable pull-down
+        .intr_type = GPIO_INTR_DISABLE        // Set interrupt type
+    };
+
+    ESP_ERROR_CHECK(gpio_config(&LED_pin));
 
     /*
     * Create usb_lib_task to:
@@ -695,6 +598,11 @@ void app_main(void)
                                             4096,
                                             NULL,
                                         2,NULL,0);
+
+    
+
+    xTaskCreate(update_led_task,"LED",4096, NULL,1,0);
+    xTaskCreate(receive_ID_task,"listen for ID",4096,NULL,2,0);
 
     // Wait for notification from usb_lib_task to proceed
     ulTaskNotifyTake(false, 1000);
@@ -717,16 +625,13 @@ void app_main(void)
 
     // Create queue
     app_event_queue = xQueueCreate(64, sizeof(app_event_queue_t));
-
+    
+    
 
 
     ESP_LOGI(TAG, "Waiting for HID Device to be connected");
 
-    while (1) {
-        // if (xStreamBufferReceive(ascii_stream_buff,msg_buff,8,portMAX_DELAY )){
-        //     printf("\nentire buffer: %s\n",msg_buff);
-        // }
-        
+    while (1) {        
         // Wait queue
         if (xQueueReceive(app_event_queue, &evt_queue, portMAX_DELAY)) {
             if (APP_EVENT == evt_queue.event_group) {
