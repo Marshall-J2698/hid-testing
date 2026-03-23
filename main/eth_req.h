@@ -1,6 +1,6 @@
 #ifndef ETH_REQ_H
 #define ETH_REQ_H   
-                                                                                                                                                                    
+
 #define ID_LEN                      8  
 
 typedef struct {
@@ -8,7 +8,7 @@ typedef struct {
 } scan_buffer_received;  
 
 void init_eth(void);
-void http_get_task(const scan_buffer_received input);   
+int http_get_task(const scan_buffer_received input);   
 
 
                                         

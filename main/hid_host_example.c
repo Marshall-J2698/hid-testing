@@ -415,8 +415,14 @@ static void receive_ID_task(void *arg) {
     scan_buffer_received rec_msg;
     for(;;){
         xQueueReceive(scannedID_queue,&rec_msg,portMAX_DELAY);
-        printf("from Q: %s\n",rec_msg.id_message);
-        http_get_task(rec_msg);
+        int msg_response = http_get_task(rec_msg);
+        access_msg command;
+        if (msg_response == 1) {
+            command.new_state = ACCESS_ON;
+        }else{
+            command.new_state = ACCESS_OFF;
+        }
+        xQueueSend(access_state_queue,&command,portMAX_DELAY);
     }
 }
 
@@ -449,8 +455,10 @@ static void scan_reader_task(void *arg)
                     memcpy(cur_msg.id_message,msg_buff,ID_LEN+1);
                     if (is_admin(admin_IDs,2,cur_msg.id_message)){
                         access_msg command;
-                        command.new_state = ACCESS_ON;
-                        xQueueSend(access_state_queue,&command,portMAX_DELAY);
+                        // TODO: reenable admin checking, to save making request
+                        // for now, just always doing http reqs, for testing purposes
+                        // command.new_state = ACCESS_ON;
+                        // xQueueSend(access_state_queue,&command,portMAX_DELAY);
                         xQueueSend(scannedID_queue,&cur_msg,portMAX_DELAY);
                     } else {
                         xQueueSend(scannedID_queue,&cur_msg,portMAX_DELAY); // TODO: send buffer through msg queue
@@ -604,7 +612,7 @@ void app_main(void)
     
 
     xTaskCreate(update_led_task,"LED",4096, NULL,1,0);
-    xTaskCreate(receive_ID_task,"listen for ID",4096,NULL,2,0);
+    xTaskCreate(receive_ID_task,"listen for ID",4096,NULL,3,0);
 
     // Wait for notification from usb_lib_task to proceed
     ulTaskNotifyTake(false, 1000);

@@ -60,6 +60,9 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
     switch (evt->event_id)
     {
     case HTTP_EVENT_ON_DATA:
+        if (evt->user_data && evt->data_len > 0){
+            memcpy(evt->user_data,evt->data,1);
+        }
         ESP_LOGI(TAG, "Response: %.*s", evt->data_len, (char *)evt->data);
         break;
     default:
@@ -68,18 +71,22 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
-void http_get_task(const scan_buffer_received input)
-{
 
+/**
+ * returns 1 if server says input is from admin!
+ */
+int http_get_task(const scan_buffer_received input)
+{
+    char res[2] = {0};
     esp_http_client_config_t config = {
         .url = "http://137.22.5.222:3000/check",
         .event_handler = http_event_handler,
         .port = 3000,
-
+        .user_data = res,
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
     char post_data[128];
-    snprintf(post_data,128,"{\"id\": \"%s\", \"machine\": \"LAT02\"}",input.id_message);
+    snprintf(post_data,128,"{\"id\": \"%s\", \"machine\": \"LAT01\"}",input.id_message);
     esp_http_client_set_method(client, HTTP_METHOD_POST);
     esp_http_client_set_header(client, "Content-Type", "application/json");
     esp_http_client_set_post_field(client, post_data, strlen(post_data));
@@ -87,6 +94,8 @@ void http_get_task(const scan_buffer_received input)
     esp_err_t err = esp_http_client_perform(client);
     if (err == ESP_OK)
     {
+        esp_http_client_read(client,res,1);
+        printf("res: %s\n",res);
         ESP_LOGI(TAG, "HTTP GET Status = %d, content_length = %lld",
                  esp_http_client_get_status_code(client),
                  esp_http_client_get_content_length(client));
@@ -97,6 +106,11 @@ void http_get_task(const scan_buffer_received input)
     }
 
     esp_http_client_cleanup(client);
+    if (res[0] == '1'){
+        return 1;
+    }
+
+    return 0;
     // TODO: decide if this should be it's own task or just wrapped by 
     // receive_ID_task
     // vTaskDelete(NULL);
