@@ -22,14 +22,15 @@
 #include "usb/hid_host.h"
 #include "usb/hid_usage_keyboard.h"
 
+
+#include "eth_req.h"
 #include "admins.h"
 
 /* GPIO Pin number for quit from example logic */
 #define APP_QUIT_PIN                GPIO_NUM_0
 
 #define LED_PIN_NUM                 GPIO_NUM_32
-
-#define ID_LEN                      8     
+   
 
 static const char *TAG = "example";
 
@@ -76,9 +77,7 @@ typedef struct {
     } hid_host_device;
 } app_event_queue_t;
 
-typedef struct {
-    char id_message[ID_LEN+1]; //TODO: should I just make ID_LEN include null terminator? i could go either way here
-} scan_buffer_received;
+
 
 /**
  * @brief Key event
@@ -417,6 +416,7 @@ static void receive_ID_task(void *arg) {
     for(;;){
         xQueueReceive(scannedID_queue,&rec_msg,portMAX_DELAY);
         printf("from Q: %s\n",rec_msg.id_message);
+        http_get_task(rec_msg);
     }
 }
 
@@ -580,6 +580,8 @@ void app_main(void)
     };
 
     ESP_ERROR_CHECK(gpio_config(&LED_pin));
+
+    init_eth();
 
     /*
     * Create usb_lib_task to:

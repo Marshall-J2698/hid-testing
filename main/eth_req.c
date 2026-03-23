@@ -68,8 +68,9 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
-void http_get_task(void *pvParameters)
+void http_get_task(const scan_buffer_received input)
 {
+
     esp_http_client_config_t config = {
         .url = "http://137.22.5.222:3000/check",
         .event_handler = http_event_handler,
@@ -77,7 +78,8 @@ void http_get_task(void *pvParameters)
 
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
-    const char *post_data = "{\"id\": \"admin\", \"machine\": \"LAT01\"}";
+    char post_data[128];
+    snprintf(post_data,128,"{\"id\": \"%s\", \"machine\": \"LAT02\"}",input.id_message);
     esp_http_client_set_method(client, HTTP_METHOD_POST);
     esp_http_client_set_header(client, "Content-Type", "application/json");
     esp_http_client_set_post_field(client, post_data, strlen(post_data));
@@ -95,7 +97,9 @@ void http_get_task(void *pvParameters)
     }
 
     esp_http_client_cleanup(client);
-    vTaskDelete(NULL);
+    // TODO: decide if this should be it's own task or just wrapped by 
+    // receive_ID_task
+    // vTaskDelete(NULL);
 }
 
 void init_eth(void)
